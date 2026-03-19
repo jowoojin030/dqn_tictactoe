@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>DQN 틱택토 게임</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #e8f4f8;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            font-family: sans-serif;
+        }
+        .container {
+            background: white;
+            padding: 28px 32px;
+            border-radius: 18px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.10);
+            text-align: center;
+            min-width: 320px;
+        }
+        h1 { font-size: 20px; font-weight: 700; color: #1a1a2e; margin-bottom: 20px; }
+        .status-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+        .lives { display: flex; gap: 6px; }
+        .heart { font-size: 20px; transition: transform 0.2s; }
+        .heart.lost { filter: grayscale(1); opacity: 0.35; transform: scale(0.85); }
+        .msg { font-size: 14px; font-weight: 600; color: #555; min-width: 160px; text-align: right; }
+        .msg.win  { color: #27ae60; }
+        .msg.lose { color: #e74c3c; }
+        .msg.draw { color: #f39c12; }
+        .board {
+            display: grid;
+            grid-template-columns: repeat(3, 90px);
+            grid-template-rows: repeat(3, 90px);
+            gap: 8px;
+            margin: 0 auto 20px;
+            width: fit-content;
+        }
+        .cell {
+            width: 90px; height: 90px;
+            border-radius: 12px;
+            border: 2px solid #dde3ec;
+            background: #f8f9fb;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 42px; font-weight: 800;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s, transform 0.1s;
+            user-select: none;
+        }
+        .cell:hover:not(.taken) { background: #eef2ff; border-color: #7b8cde; }
+        .cell.taken { cursor: default; }
+        .cell.o { color: #2980b9; }
+        .cell.x { color: #c0392b; }
+        .cell.highlight { background: #eafaf1; border-color: #27ae60; transform: scale(1.04); }
+        .btn-row { display: flex; gap: 10px; justify-content: center; }
+        button {
+            padding: 10px 22px; font-size: 14px; font-weight: 600;
+            border-radius: 8px; border: none; cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+        }
+        button:active { transform: scale(0.97); }
+        .btn-primary { background: #2c3e50; color: white; }
+        .btn-primary:hover { background: #1a252f; }
+        .btn-secondary { background: #ecf0f1; color: #2c3e50; }
+        .btn-secondary:hover { background: #dfe6e9; }
+        .scoreboard { display: flex; gap: 16px; justify-content: center; margin-bottom: 18px; }
+        .score-card { background: #f4f6fa; border-radius: 10px; padding: 8px 18px; font-size: 13px; color: #555; }
+        .score-card span { display: block; font-size: 20px; font-weight: 700; color: #1a1a2e; margin-top: 2px; }
+        .overlay {
+            display: none; position: absolute; inset: 0;
+            background: rgba(255,255,255,0.88);
+            border-radius: 18px;
+            flex-direction: column; align-items: center; justify-content: center;
+            gap: 16px; z-index: 10;
+        }
+        .overlay.show { display: flex; }
+        .overlay-title { font-size: 28px; font-weight: 800; color: #e74c3c; }
+        .overlay-sub { font-size: 14px; color: #888; }
+        .container-wrap { position: relative; }
+    </style>
+</head>
+<body>
+<div class="container-wrap">
+    <div class="container">
+        <h1>DQN 틱택토</h1>
+
+        <div class="scoreboard">
+            <div class="score-card">승리 <span id="sc-win">0</span></div>
+            <div class="score-card">무승부 <span id="sc-draw">0</span></div>
+            <div class="score-card">패배 <span id="sc-lose">0</span></div>
+        </div>
+
+        <div class="status-bar">
+            <div class="lives" id="lives"></div>
+            <div class="msg" id="msg">플레이어(O) 차례입니다</div>
+        </div>
+
+        <div class="board" id="board"></div>
+
+        <div class="btn-row">
+            <button class="btn-primary" onclick="nextRound()">다음 판</button>
+            <button class="btn-secondary" onclick="fullReset()">완전 초기화</button>
+        </div>
+    </div>
+
+    <div class="overlay" id="overlay">
+        <div class="overlay-title">GAME OVER</div>
+        <div class="overlay-sub">라이프를 모두 잃었습니다</div>
+        <button class="btn-primary" onclick="fullReset()">다시 시작</button>
+    </div>
+</div>
+
+<script>
+    const WIN_LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+    const MAX_LIVES = 3;
+
+    let board      = Array(9).fill(0);
+    let lives      = MAX_LIVES;
+    let isLocked   = false;
+    let isGameOver = false;
+    let score      = { win: 0, draw: 0, lose: 0 };
+
+    function renderLives() {
+        const el = document.getElementById('lives');
+        el.innerHTML = '';
+        for (let i = 0; i < MAX_LIVES; i++) {
+            const h = document.createElement('span');
+            h.className = 'heart' + (i < lives ? '' : ' lost');
+            h.textContent = '❤️';
+            el.appendChild(h);
+        }
+    }
+
+    function renderBoard(winLine) {
+        const el = document.getElementById('board');
+        el.innerHTML = '';
+        board.forEach((v, i) => {
+            const cell = document.createElement('div');
+            const mark = v === -1 ? 'o' : v === 1 ? 'x' : '';
+            cell.className = 'cell' +
+                (mark ? ' taken ' + mark : '') +
+                (winLine && winLine.includes(i) ? ' highlight' : '');
+            cell.textContent = v === -1 ? 'O' : v === 1 ? 'X' : '';
+            cell.onclick = () => play(i);
+            el.appendChild(cell);
+        });
+    }
+
+    function setMsg(text, cls) {
+        const el = document.getElementById('msg');
+        el.textContent = text;
+        el.className = 'msg' + (cls ? ' ' + cls : '');
+    }
+
+    function updateScore() {
+        document.getElementById('sc-win').textContent  = score.win;
+        document.getElementById('sc-draw').textContent = score.draw;
+        document.getElementById('sc-lose').textContent = score.lose;
+    }
+
+    function checkWin(p) {
+        return WIN_LINES.find(line => line.every(i => board[i] === p)) || null;
+    }
+
+    async function play(idx) {
+        if (isLocked || isGameOver || board[idx] !== 0) return;
+        isLocked = true;
+
+        board[idx] = -1;
+        let wl = checkWin(-1);
+        renderBoard(wl);
+
+        if (wl) {
+            score.win++;
+            updateScore();
+            setMsg('플레이어 승리!', 'win');
+            isLocked = false;
+            return;
+        }
+        if (!board.includes(0)) {
+            score.draw++;
+            updateScore();
+            setMsg('무승부!', 'draw');
+            isLocked = false;
+            return;
+        }
+
+        setMsg('AI 생각 중...');
+        try {
+            const res = await fetch('/move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ board })
+            });
+            if (!res.ok) throw new Error('서버 오류');
+
+            const data = await res.json();
+            board[data.row * 3 + data.col] = 1;
+            wl = checkWin(1);
+            renderBoard(wl);
+
+            if (wl) {
+                lives--;
+                renderLives();
+                score.lose++;
+                updateScore();
+                setMsg('AI 승리!', 'lose');
+                if (lives <= 0) {
+                    isGameOver = true;
+                    setTimeout(() => document.getElementById('overlay').classList.add('show'), 800);
+                }
+            } else if (!board.includes(0)) {
+                score.draw++;
+                updateScore();
+                setMsg('무승부!', 'draw');
+            } else {
+                setMsg('플레이어(O) 차례입니다');
+            }
+        } catch (e) {
+            board[idx] = 0;
+            renderBoard();
+            setMsg('서버 연결 실패 — 다시 시도하세요', 'lose');
+        }
+
+        isLocked = false;
+    }
+
+    function nextRound() {
+        if (isGameOver) return;
+        board    = Array(9).fill(0);
+        isLocked = false;
+        renderBoard();
+        setMsg('플레이어(O) 차례입니다');
+    }
+
+    function fullReset() {
+        board      = Array(9).fill(0);
+        lives      = MAX_LIVES;
+        isLocked   = false;
+        isGameOver = false;
+        score      = { win: 0, draw: 0, lose: 0 };
+        document.getElementById('overlay').classList.remove('show');
+        renderLives();
+        renderBoard();
+        updateScore();
+        setMsg('플레이어(O) 차례입니다');
+    }
+
+    renderLives();
+    renderBoard();
+</script>
+</body>
+</html>
